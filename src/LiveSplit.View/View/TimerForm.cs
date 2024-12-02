@@ -180,47 +180,53 @@ public partial class TimerForm : Form
 
     private void Init(string splitsPath = null, string layoutPath = null)
     {
+        InitializeCoreComponents();
+        LoadSplitsAsync(splitsPath).ConfigureAwait(false);
+        LoadLayoutAsync(layoutPath).ConfigureAwait(false);
+        SetupStateAsync();
+        RegisterEventHandlers();
+        InitializeHooksAsync();
+        ConfigureServerAsync();
+        ConfigureTimersAsync();
+        ConfigureUIAsync();
+    }
+
+    // Initializes core components like LiveSplit Core and GlobalCache
+    private void InitializeCoreComponents()
+    {
         LiveSplitCoreFactory.LoadLiveSplitCore();
-
         SetWindowTitle();
-
         SpeedrunCom.Authenticator = new SpeedrunComApiKeyPrompt();
-
         GlobalCache = new GraphicsCache();
         Invalidator = new Invalidator(this);
         SetStyle(ControlStyles.SupportsTransparentBackColor, true);
-
         ComponentManager.BasePath = BasePath;
-
-        CurrentState = new LiveSplitState(null, this, null, null, null);
-
         ComparisonGeneratorsFactory = new StandardComparisonGeneratorsFactory();
-
         Model = new DoubleTapPrevention(new TimerModel());
-
-        ComponentManager.RaceProviderFactories = ComponentManager.LoadAllFactories<IRaceProviderFactory>();
-        ComponentManager.RaceProviderFactories["SRL"] = new SRLFactory();
         RunFactory = new StandardFormatsRunFactory();
         RunSaver = new XMLRunSaver();
         LayoutSaver = new XMLLayoutSaver();
         SettingsSaver = new XMLSettingsSaver();
-        LoadSettings();
+        LoadSettingsAsync().ConfigureAwait(false);
+    }
 
-        CurrentState.CurrentHotkeyProfile = Settings.HotkeyProfiles.First().Key;
+    // Asynchronously loads settings
+    private async Task LoadSettingsAsync()
+    {
+        await Task.Run(() => LoadSettings());
+    }
 
-        UpdateRecentSplits();
-        UpdateRecentLayouts();
-
+    // Asynchronously loads splits if provided
+    private async Task LoadSplitsAsync(string splitsPath)
+    {
         IRun timerOnlyRun = new StandardRunFactory().Create(ComparisonGeneratorsFactory);
-
         IRun run = timerOnlyRun;
         try
         {
             if (!string.IsNullOrEmpty(splitsPath))
             {
                 UpdateStateFromSplitsPath(splitsPath);
-
-                run = LoadRunFromFile(splitsPath);
+                run = await LoadRunFromFileAsync(splitsPath);
             }
             else if (Settings.RecentSplits.Count > 0)
             {
@@ -228,8 +234,7 @@ public partial class TimerForm : Form
                 if (!string.IsNullOrEmpty(lastSplitFile.Path))
                 {
                     UpdateStateFromSplitsPath(lastSplitFile.Path);
-
-                    run = LoadRunFromFile(lastSplitFile.Path);
+                    run = await LoadRunFromFileAsync(lastSplitFile.Path);
                 }
             }
         }
@@ -241,21 +246,30 @@ public partial class TimerForm : Form
         run.FixSplits();
         CurrentState.Run = run;
         CurrentState.Settings = Settings;
+    }
 
+    // Asynchronously loads a run from file
+    private async Task<IRun> LoadRunFromFileAsync(string path)
+    {
+        return await Task.Run(() => LoadRunFromFile(path));
+    }
+
+    // Asynchronously loads layout if provided
+    private async Task LoadLayoutAsync(string layoutPath)
+    {
         try
         {
             if (!string.IsNullOrEmpty(layoutPath))
             {
-                Layout = LoadLayoutFromFile(layoutPath);
+                Layout = await LoadLayoutFromFileAsync(layoutPath);
             }
             else
             {
-                if (Settings.RecentLayouts.Count > 0
-                    && !string.IsNullOrEmpty(Settings.RecentLayouts.Last()))
+                if (HasRecentLayout())
                 {
-                    Layout = LoadLayoutFromFile(Settings.RecentLayouts.Last());
+                    Layout = await LoadLayoutFromFileAsync(Settings.RecentLayouts.Last());
                 }
-                else if (run == timerOnlyRun)
+                else if (CurrentState.Run == new StandardRunFactory().Create(ComparisonGeneratorsFactory))
                 {
                     Layout = new TimerOnlyLayoutFactory().Create(CurrentState);
                     InTimerOnlyMode = true;
@@ -272,57 +286,105 @@ public partial class TimerForm : Form
             Layout = new StandardLayoutFactory().Create(CurrentState);
         }
 
-        InTimerOnlyMode = run == timerOnlyRun;
+        InTimerOnlyMode = CurrentState.Run == new StandardRunFactory().Create(ComparisonGeneratorsFactory);
         if (InTimerOnlyMode)
         {
             SetInTimerOnlyMode();
         }
-
-        CurrentState.LayoutSettings = Layout.Settings;
-        CreateAutoSplitter();
-
-        SwitchComparisonGenerators();
-        SwitchComparison(Settings.LastComparison);
-        Model.CurrentState = CurrentState;
-
-        CurrentState.OnReset += CurrentState_OnReset;
-        CurrentState.OnStart += CurrentState_OnStart;
-        CurrentState.OnSplit += CurrentState_OnSplit;
-        CurrentState.OnSkipSplit += CurrentState_OnSkipSplit;
-        CurrentState.OnUndoSplit += CurrentState_OnUndoSplit;
-        CurrentState.OnPause += CurrentState_OnPause;
-        CurrentState.OnUndoAllPauses += CurrentState_OnUndoAllPauses;
-        CurrentState.OnResume += CurrentState_OnResume;
-        CurrentState.OnSwitchComparisonPrevious += CurrentState_OnSwitchComparisonPrevious;
-        CurrentState.OnSwitchComparisonNext += CurrentState_OnSwitchComparisonNext;
-
-        ComponentRenderer = new ComponentRenderer();
-
-        StartPosition = FormStartPosition.Manual;
-
-        SetLayout(Layout);
-
-        RefreshTask = Task.Factory.StartNew(RefreshTimerWorker);
-
-        InvalidationRequired = false;
-
-        Hook = new CompositeHook(false);
-        Hook.GamepadHookInitialized += Hook_GamepadHookInitialized;
-        Hook.KeyOrButtonPressed += hook_KeyOrButtonPressed;
-        Settings.RegisterHotkeys(Hook, CurrentState.CurrentHotkeyProfile);
-
-        SizeChanged += TimerForm_SizeChanged;
-
-        TopMost = Layout.Settings.AlwaysOnTop;
-        BackColor = Color.Black;
-
-        Server = new CommandServer(CurrentState);
-        Server.StartNamedPipe();
-
-        new System.Timers.Timer(1000) { Enabled = true }.Elapsed += PerSecondTimer_Elapsed;
-
-        InitDragAndDrop();
     }
+
+    // Asynchronously loads a layout from file
+    private async Task<ILayout> LoadLayoutFromFileAsync(string path)
+    {
+        return await Task.Run(() => LoadLayoutFromFile(path));
+    }
+
+    // Sets up the core state and configuration asynchronously
+    private async Task SetupStateAsync()
+    {
+        await Task.Run(() =>
+        {
+            ComponentManager.RaceProviderFactories = ComponentManager.LoadAllFactories<IRaceProviderFactory>();
+            ComponentManager.RaceProviderFactories["SRL"] = new SRLFactory();
+            CurrentState = new LiveSplitState(null, this, null, null, null);
+            CurrentState.CurrentHotkeyProfile = Settings.HotkeyProfiles.First().Key;
+            UpdateRecentSplits();
+            UpdateRecentLayouts();
+            CurrentState.LayoutSettings = Layout.Settings;
+            CreateAutoSplitter();
+            SwitchComparisonGenerators();
+            SwitchComparison(Settings.LastComparison);
+            Model.CurrentState = CurrentState;
+        });
+    }
+
+    // Registers all event handlers for CurrentState asynchronously
+    private void RegisterEventHandlers()
+    {
+        CurrentState.OnReset += async (sender, e) => await Task.Run(() => CurrentState_OnReset(sender, e));
+        CurrentState.OnStart += async (sender, e) => await Task.Run(() => CurrentState_OnStart(sender, e));
+        CurrentState.OnSplit += async (sender, e) => await Task.Run(() => CurrentState_OnSplit(sender, e));
+        CurrentState.OnSkipSplit += async (sender, e) => await Task.Run(() => CurrentState_OnSkipSplit(sender, e));
+        CurrentState.OnUndoSplit += async (sender, e) => await Task.Run(() => CurrentState_OnUndoSplit(sender, e));
+        CurrentState.OnPause += async (sender, e) => await Task.Run(() => CurrentState_OnPause(sender, e));
+        CurrentState.OnUndoAllPauses += async (sender, e) => await Task.Run(() => CurrentState_OnUndoAllPauses(sender, e));
+        CurrentState.OnResume += async (sender, e) => await Task.Run(() => CurrentState_OnResume(sender, e));
+        CurrentState.OnSwitchComparisonPrevious += async (sender, e) => await Task.Run(() => CurrentState_OnSwitchComparisonPrevious(sender, e));
+        CurrentState.OnSwitchComparisonNext += async (sender, e) => await Task.Run(() => CurrentState_OnSwitchComparisonNext(sender, e));
+    }
+
+    // Initializes input hooks for gamepad and keyboard events asynchronously
+    private async Task InitializeHooksAsync()
+    {
+        await Task.Run(() =>
+        {
+            Hook = new CompositeHook(false);
+            Hook.GamepadHookInitialized += Hook_GamepadHookInitialized;
+            Hook.KeyOrButtonPressed += hook_KeyOrButtonPressed;
+            Settings.RegisterHotkeys(Hook, CurrentState.CurrentHotkeyProfile);
+        });
+    }
+
+    // Configures the command server asynchronously
+    private async Task ConfigureServerAsync()
+    {
+        await Task.Run(() =>
+        {
+            Server = new CommandServer(CurrentState);
+            Server.StartNamedPipe();
+        });
+    }
+
+    // Configures timers used in the application asynchronously
+    private async Task ConfigureTimersAsync()
+    {
+        await Task.Run(() =>
+        {
+            var timer = new System.Timers.Timer(1000) { Enabled = true };
+            timer.Elapsed += async (sender, e) => await Task.Run(() => PerSecondTimer_Elapsed(sender, e));
+
+            RefreshTask = Task.Run(RefreshTimerWorker);
+            InvalidationRequired = false;
+        });
+    }
+
+    // Configures general UI settings asynchronously with optimizations
+    private async Task ConfigureUIAsync()
+    {
+        await Task.Run(() =>
+        {
+            ComponentRenderer ??= new ComponentRenderer(); // Lazy initialization to minimize memory use
+            StartPosition = FormStartPosition.Manual;
+            SetLayout(Layout);
+            TopMost = Layout?.Settings?.AlwaysOnTop ?? false;
+            BackColor = Color.Black;
+            SizeChanged += TimerForm_SizeChanged;
+            InitDragAndDrop();
+        });
+    }
+
+    // Utility to determine if there is a recent layout to load
+    private bool HasRecentLayout() => Settings.RecentLayouts.Count > 0 && !string.IsNullOrEmpty(Settings.RecentLayouts.Last());
 
     private void InitDragAndDrop()
     {
@@ -385,8 +447,8 @@ public partial class TimerForm : Form
     private void SetWindowTitle()
     {
         int lowestAvailableNumber = 0;
-        string currentName = "LiveSplit";
-        IEnumerable<string> processNames = Process.GetProcessesByName("LiveSplit").Select(x => x.MainWindowTitle);
+        string currentName = "LiveSplit - Powered by SPEEDBOARDS.LIVE";
+        IEnumerable<string> processNames = Process.GetProcessesByName("LiveSplit - Powered by SPEEDBOARDS.LIVE").Select(x => x.MainWindowTitle);
 
         while (processNames.Contains(currentName))
         {
