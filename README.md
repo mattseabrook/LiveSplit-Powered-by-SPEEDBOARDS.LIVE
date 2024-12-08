@@ -6,9 +6,33 @@
 
 Software will officially release in 2025, but I am looking for Beta Testers right now! 
 
-Please contact us: speedboards@gmail.com
+Please contact us: speedboards.live@gmail.com
 
 # CHANGELOG
+
+## 2024-12-08
+
+Refactored my new `Init` function to wait for `Settings` to actually be available before trying to access it:
+
+```csharp
+    private async Task Init(string splitsPath = null, string layoutPath = null)
+    {
+        InitializeCoreComponents();
+        await LoadSettingsAsync(); // Ensure settings are loaded first.
+        await Task.WhenAll(
+            LoadSplitsAsync(splitsPath),
+            LoadLayoutAsync(layoutPath)
+        );
+        await SetupStateAsync();
+        RegisterEventHandlers();
+        await Task.WhenAll(
+            InitializeHooksAsync(),
+            ConfigureServerAsync(),
+            ConfigureTimersAsync(),
+            ConfigureUIAsync()
+        );
+    }
+```
 
 ## 2024-12-01
 

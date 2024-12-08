@@ -178,17 +178,22 @@ public partial class TimerForm : Form
         Init(splitsPath, layoutPath);
     }
 
-    private void Init(string splitsPath = null, string layoutPath = null)
+    private async Task Init(string splitsPath = null, string layoutPath = null)
     {
         InitializeCoreComponents();
-        LoadSplitsAsync(splitsPath).ConfigureAwait(false);
-        LoadLayoutAsync(layoutPath).ConfigureAwait(false);
-        SetupStateAsync();
+        await LoadSettingsAsync(); // Ensure settings are loaded first.
+        await Task.WhenAll(
+            LoadSplitsAsync(splitsPath),
+            LoadLayoutAsync(layoutPath)
+        );
+        await SetupStateAsync();
         RegisterEventHandlers();
-        InitializeHooksAsync();
-        ConfigureServerAsync();
-        ConfigureTimersAsync();
-        ConfigureUIAsync();
+        await Task.WhenAll(
+            InitializeHooksAsync(),
+            ConfigureServerAsync(),
+            ConfigureTimersAsync(),
+            ConfigureUIAsync()
+        );
     }
 
     // Initializes core components like LiveSplit Core and GlobalCache
